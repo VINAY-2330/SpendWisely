@@ -2,200 +2,211 @@ import os
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
 
-# Load environment variables (like your Neon DATABASE_URL)
+# Load environment variables
 load_dotenv()
 
-app = FastAPI()
+app = FastAPI(title="SpendWisely API")
 
-# Configure CORS so your React frontend can communicate with this API
+# --- CORS CONFIGURATION ---
+# Added your specific Vercel URL to allow frontend requests
+origins = [
+    "http://localhost:5173",
+    "https://spend-wisely-steel.vercel.app" 
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"], 
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Database connection helper
+# --- DATABASE CONNECTION ---
 def get_db_connection():
     try:
-        conn = psycopg2.connect(os.environ["DATABASE_URL"])
+        conn = psycopg2.connect(
+            os.getenv("DATABASE_URL"),
+            cursor_factory=RealDictCursor
+        )
         return conn
     except Exception as e:
+        print(f"Database connection error: {e}")
         raise HTTPException(status_code=500, detail="Database connection failed")
 
-# Pydantic models for request validation
+# --- MODELS ---
 class RedeemRequest(BaseModel):
     reward_id: int
 
+# --- API ENDPOINTS ---
 
-# ==========================================
-# API ENDPOINTS
-# ==========================================
-
-
-# 1. Fetch User Balance
 @app.get("/api/balance")
 def get_balance():
     conn = get_db_connection()
+    cur = conn.cursor()
     try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("SELECT coins FROM user_balance LIMIT 1;")
-            record = cur.fetchone()
-            return {"coins": record['coins'] if record else 0}
+        # Single mocked user for project scope
+        cur.execute("SELECT coins FROM user_balance WHERE id = 1;")
+        result = cur.fetchone()
+        if not result:
+            return {"coins": 0}
+        return result
     finally:
+        cur.close()
         conn.close()
 
-
-# 2. Fetch the Rewards Catalogue
 @app.get("/api/rewards")
 def get_rewards():
     conn = get_db_connection()
+    cur = conn.cursor()
     try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("SELECT id, name, description, coin_cost FROM rewards_catalogue ORDER BY coin_cost ASC;")
-            return cur.fetchall()
+        cur.execute("SELECT id, name, description, coin_cost FROM rewards ORDER BY coin_cost ASC;")
+        rewards = cur.fetchall()
+        return rewards
     finally:
+        cur.close()
         conn.close()
 
-
-# 3. Fetch Transactions (with advanced filtering, sorting, and pagination)
 @app.get("/api/transactions")
 def get_transactions(
-    page: int = Query(1, ge=1),
-    limit: int = Query(50, ge=1, le=100),
-    search: Optional[str] = None,
-    category: Optional[str] = None,
-    status: Optional[str] = None,
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
-    amount_min: Optional[float] = None,
-    amount_max: Optional[float] = None,
-    sort_by: str = Query("txn_timestamp", pattern="^(txn_timestamp|amount)$"), # Safe column sorting
-    sort_dir: str = Query("desc", pattern="^(asc|desc)$") # Safe direction sorting
+    page: int = 1,
+    limit: int = 10,
+    search: str = "",
+    category: str = "",
+    status: str = "",
+    amount_min: str = "",
+    amount_max: str = "",
+    sort_by: str = "txn_timestamp",
+    sort_dir: str = "desc"
 ):
     conn = get_db_connection()
-    offset = (page - 1) * limit
-    
+    cur = conn.cursor()
     try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            # Base queries using 1=1 to easily append AND clauses
-            query = "SELECT * FROM transactions WHERE 1=1"
-            count_query = "SELECT COUNT(*) FROM transactions WHERE 1=1"
-            params = []
+        # 1. Input Validation (Prevent SQL Injection on sort parameters)
+        valid_sort_columns = ["txn_timestamp", "amount", "merchant", "category", "status"]
+        if sort_by not in valid_sort_columns:
+            sort_by = "txn_timestamp"
             
-            # Dynamic Filtering
-            if search:
-                query += " AND merchant ILIKE %s" # ILIKE provides case-insensitive search
-                count_query += " AND merchant ILIKE %s"
-                params.append(f"%{search}%")
-                
-            if category:
-                query += " AND category = %s"
-                count_query += " AND category = %s"
-                params.append(category)
-                
-            if status:
-                query += " AND status = %s"
-                count_query += " AND status = %s"
-                params.append(status)
-                
-            if date_from:
-                query += " AND txn_timestamp >= %s"
-                count_query += " AND txn_timestamp >= %s"
-                params.append(date_from)
-                
-            if date_to:
-                query += " AND txn_timestamp <= %s"
-                count_query += " AND txn_timestamp <= %s"
-                params.append(date_to)
-                
-            if amount_min is not None:
-                query += " AND amount >= %s"
-                count_query += " AND amount >= %s"
-                params.append(amount_min)
-                
-            if amount_max is not None:
-                query += " AND amount <= %s"
-                count_query += " AND amount <= %s"
-                params.append(amount_max)
-                
-            # Execute count query FIRST before adding ORDER BY and LIMIT clauses
-            cur.execute(count_query, params)
-            total_records = cur.fetchone()['count']
+        if sort_dir.lower() not in ["asc", "desc"]:
+            sort_dir = "desc"
+
+        # 2. Build the dynamic WHERE clause
+        query_conditions = ["1=1"]
+        params = []
+
+        if search:
+            query_conditions.append("merchant ILIKE %s")
+            params.append(f"%{search}%")
+        
+        if category:
+            query_conditions.append("category = %s")
+            params.append(category)
             
-            # Add secure dynamic sorting
-            query += f" ORDER BY {sort_by} {sort_dir.upper()}"
+        if status:
+            query_conditions.append("status = %s")
+            params.append(status)
             
-            # Add pagination
-            query += " LIMIT %s OFFSET %s"
-            params.extend([limit, offset])
-            
-            # Execute final data query
-            cur.execute(query, params)
-            transactions = cur.fetchall()
-            
-            return {
-                "data": transactions,
-                "total": total_records,
-                "page": page,
-                "limit": limit,
-                "total_pages": (total_records + limit - 1) // limit if total_records > 0 else 1
-            }
+        if amount_min:
+            try:
+                query_conditions.append("amount >= %s")
+                params.append(float(amount_min))
+            except ValueError:
+                pass
+                
+        if amount_max:
+            try:
+                query_conditions.append("amount <= %s")
+                params.append(float(amount_max))
+            except ValueError:
+                pass
+
+        where_clause = " AND ".join(query_conditions)
+
+        # 3. Get total count for pagination math
+        count_query = f"SELECT COUNT(*) FROM transactions WHERE {where_clause};"
+        cur.execute(count_query, params)
+        total_records = cur.fetchone()["count"]
+        total_pages = (total_records + limit - 1) // limit
+
+        # 4. Fetch paginated, filtered data
+        offset = (page - 1) * limit
+        data_query = f"""
+            SELECT id, external_id, merchant, category, amount, currency, 
+                   payment_method, status, txn_timestamp, coins_earned
+            FROM transactions
+            WHERE {where_clause}
+            ORDER BY {sort_by} {sort_dir}
+            LIMIT %s OFFSET %s;
+        """
+        data_params = params + [limit, offset]
+        cur.execute(data_query, data_params)
+        transactions = cur.fetchall()
+
+        # Format datetime objects into strings for valid JSON responses
+        for txn in transactions:
+            if 'txn_timestamp' in txn and txn['txn_timestamp']:
+                txn['txn_timestamp'] = txn['txn_timestamp'].isoformat()
+
+        return {
+            "data": transactions,
+            "total": total_records,
+            "page": page,
+            "limit": limit,
+            "total_pages": total_pages
+        }
     finally:
+        cur.close()
         conn.close()
 
 
-# 4. Process a Reward Redemption (Atomic Transaction)
 @app.post("/api/rewards/redeem")
-def redeem_reward(req: RedeemRequest):
+def redeem_reward(request: RedeemRequest):
     conn = get_db_connection()
+    cur = conn.cursor()
     try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            # Start database transaction to ensure Atomicity
-            cur.execute("BEGIN;")
+        # Start explicit transaction
+        cur.execute("BEGIN;")
+
+        # 1. Fetch reward cost
+        cur.execute("SELECT coin_cost FROM rewards WHERE id = %s;", (request.reward_id,))
+        reward = cur.fetchone()
+        if not reward:
+            cur.execute("ROLLBACK;")
+            raise HTTPException(status_code=404, detail="Reward not found")
             
-            # Check if reward exists and retrieve its cost
-            cur.execute("SELECT coin_cost FROM rewards_catalogue WHERE id = %s;", (req.reward_id,))
-            reward = cur.fetchone()
-            if not reward:
-                cur.execute("ROLLBACK;")
-                raise HTTPException(status_code=404, detail="Reward not found")
+        cost = reward["coin_cost"]
+
+        # 2. Fetch user balance with a ROW LEVEL LOCK to prevent race conditions
+        cur.execute("SELECT coins FROM user_balance WHERE id = 1 FOR UPDATE;")
+        user_balance_row = cur.fetchone()
+        
+        if not user_balance_row:
+            cur.execute("ROLLBACK;")
+            raise HTTPException(status_code=404, detail="User balance not found")
             
-            cost = reward['coin_cost']
-            
-            # Check user balance and apply a Row-Level Lock (FOR UPDATE) to prevent race conditions
-            cur.execute("SELECT coins FROM user_balance LIMIT 1 FOR UPDATE;") 
-            balance_record = cur.fetchone()
-            current_balance = balance_record['coins'] if balance_record else 0
-            
-            if current_balance < cost:
-                cur.execute("ROLLBACK;")
-                raise HTTPException(status_code=400, detail="Insufficient coin balance")
-            
-            # Deduct balance and insert redemption record
-            new_balance = current_balance - cost
-            cur.execute("UPDATE user_balance SET coins = %s, updated_at = now();", (new_balance,))
-            cur.execute(
-                "INSERT INTO redemptions (reward_id, coins_spent) VALUES (%s, %s);",
-                (req.reward_id, cost)
-            )
-            
-            # Commit the transaction safely
-            cur.execute("COMMIT;")
-            return {"status": "success", "message": "Reward redeemed successfully", "new_balance": new_balance}
-            
+        current_balance = user_balance_row["coins"]
+
+        # 3. Validate affordability
+        if current_balance < cost:
+            cur.execute("ROLLBACK;")
+            raise HTTPException(status_code=400, detail="Insufficient coins")
+
+        # 4. Deduct balance safely
+        new_balance = current_balance - cost
+        cur.execute("UPDATE user_balance SET coins = %s WHERE id = 1;", (new_balance,))
+
+        # Commit the transaction safely
+        cur.execute("COMMIT;")
+        
+        return {"success": True, "new_balance": new_balance, "message": "Reward redeemed successfully!"}
+
     except Exception as e:
-        conn.rollback()
-        # Re-raise explicit HTTP exceptions so FastAPI returns the correct status code (e.g., 400, 404)
-        if isinstance(e, HTTPException):
-            raise e
-        # Catch unexpected errors as 500s
+        cur.execute("ROLLBACK;")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
+        cur.close()
         conn.close()
