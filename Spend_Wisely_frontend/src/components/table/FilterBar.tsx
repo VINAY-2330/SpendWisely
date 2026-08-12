@@ -22,6 +22,7 @@ export default function FilterBar({ filters, setFilters, isDark = true }: Filter
 
   return (
     <div className="flex flex-wrap gap-3 mb-6">
+      {/* Search Input */}
       <div className="relative flex-grow min-w-[200px]">
         <svg className={`w-4 h-4 absolute left-4 top-2.5 ${isDark ? 'text-slate-400' : 'text-slate-500'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
         <input 
@@ -30,6 +31,20 @@ export default function FilterBar({ filters, setFilters, isDark = true }: Filter
         />
       </div>
 
+      {/* NEW: Date Range Pickers styled with your custom UI */}
+      <div className="flex items-center gap-2">
+        <input 
+          type="date" name="start_date" value={filters.start_date || ''} onChange={handleChange} 
+          className={`px-3 py-2 border rounded-full text-sm focus:outline-none ${inputClasses}`}
+        />
+        <span className={`text-sm font-medium ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>to</span>
+        <input 
+          type="date" name="end_date" value={filters.end_date || ''} onChange={handleChange} 
+          className={`px-3 py-2 border rounded-full text-sm focus:outline-none ${inputClasses}`}
+        />
+      </div>
+
+      {/* Category Dropdown */}
       <select 
         name="category" 
         value={filters.category} 
@@ -45,6 +60,7 @@ export default function FilterBar({ filters, setFilters, isDark = true }: Filter
         <option value="Entertainment">Entertainment</option>
       </select>
 
+      {/* Status Dropdown */}
       <select 
         name="status" 
         value={filters.status} 

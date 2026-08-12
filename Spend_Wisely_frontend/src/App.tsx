@@ -10,7 +10,9 @@ import Sidebar from "./components/Layout/Sidebar";
 
 function App() {
   const [filters, setFilters] = useState<TransactionFilters>({
-    search: '', category: '', status: '', amount_min: '', amount_max: '', sort_by: 'txn_timestamp', sort_dir: 'desc'
+    search: '', category: '', status: '', amount_min: '', amount_max: '', 
+    start_date: '', end_date: '', // NEW
+    sort_by: 'txn_timestamp', sort_dir: 'desc'
   });
   const [isDark, setIsDark] = useState(true);
 

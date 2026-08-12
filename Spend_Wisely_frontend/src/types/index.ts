@@ -37,6 +37,8 @@ export interface TransactionFilters {
   status: string;
   amount_min: string;
   amount_max: string;
+  start_date: string; 
+  end_date: string;   
   sort_by: string;
   sort_dir: string;
 }
